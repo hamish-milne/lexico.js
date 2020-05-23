@@ -1,0 +1,18 @@
+{
+    "compilerOptions": {
+        "noImplicitAny": true,
+        "target": "ES5",
+        "module": "CommonJS",
+        "strict": true,
+        "sourceMap": true,
+        "outDir": "dist",
+        "declaration": true,
+        "esModuleInterop": true,
+        "importHelpers": true,
+        "moduleResolution": "node",
+    },
+    "include":["src/**/*"],
+    "exclude": [
+        "node_modules"
+    ]
+}
