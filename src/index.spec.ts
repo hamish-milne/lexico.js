@@ -7,8 +7,31 @@ import {
   repeat,
   float,
   parser,
+  ignore,
+  capture,
+  nothing,
+  not,
+  eof,
+  cut,
 } from "./index";
 import assert from "assert";
+
+describe("Parser", function () {
+  describe("cut", function () {
+    it("stops evaluation of further options", function () {
+      const p = parser(options(["1", cut, float], ["1notanumber"]));
+      try {
+        p({
+          position: 0,
+          text: "1notanumber",
+        });
+      } catch {
+        return; // Success
+      }
+      throw null;
+    });
+  });
+});
 
 describe("JSON", function () {
   type jsonValueType =
@@ -30,24 +53,19 @@ describe("JSON", function () {
     t: "\t",
     '"': '"',
   };
-  const jsonString = convert(['"', /(?:[^"\\]|(?:\\[bfnrt"\\]))*/, '"'], (x) =>
-    x.replace(/\\[bfnrt"\\]/, (c) => escapeCodes[c[1]])
+  const jsonString = convert(
+    ['"', capture(/(?:[^"\\]|(?:\\[bfnrt"\\]))*/), '"'],
+    (x) => x.replace(/\\[bfnrt"\\]/, (c) => escapeCodes[c[1]])
   );
-  const comma = [whitespace, ",", whitespace];
-  const jsonArray = [
-    "[",
-    whitespace,
-    repeat(jsonValue, comma),
-    whitespace,
-    "]",
-  ];
+  const comma = /\s*,\s*/;
+  const jsonArray = [ignore(/\[\s*/), repeat(jsonValue, comma), ignore(/\s*]/)];
   const jsonProp = {
-    key: options(float, jsonString),
-    _: [whitespace, ":", whitespace],
+    key: jsonString,
+    _: ignore(/\s*:\s*/),
     value: jsonValue,
   };
   const jsonDictionary = convert(
-    ["{", whitespace, repeat(jsonProp, comma), "}", whitespace],
+    [ignore(/{\s*/), repeat(jsonProp, comma), ignore(/}\s*/)],
     (pairs) => {
       const retval: { [key: string]: any; [key: number]: any } = {};
       for (const pair of pairs) {
@@ -61,7 +79,7 @@ describe("JSON", function () {
   );
   const jsonDocument = parser([whitespace, jsonValue, whitespace]);
 
-  it("should parse a combined object", function () {
+  it("parses a combined object", function () {
     const testObj = {
       users: [
         {
@@ -87,3 +105,100 @@ describe("JSON", function () {
     assert.equal(JSON.stringify(result), text);
   });
 });
+
+const expr = unary<number>();
+function op(opr: string, fn: (a: number, b: number) => number) {
+  return convert(
+    {
+      lhs: expr,
+      _: opr,
+      rhs: expr,
+    },
+    (x) => fn(x.lhs, x.rhs)
+  );
+}
+expr(
+  options(
+    op("-", (a, b) => a - b),
+    op("+", (a, b) => a + b),
+    op("*", (a, b) => a * b),
+    op("/", (a, b) => a / b),
+    op("^", (a, b) => a ^ b),
+    parser(["(", expr, ")"]),
+    float
+  )
+);
+
+type ValueExpr = { start: string; ops: (ElementExpr[] | string)[] };
+type PortList = { name: string; hint?: ElementExpr }[];
+type LambdaExpr = { args: PortList; body: ElementExpr };
+type ElementExpr = ValueExpr | LambdaExpr;
+type ElementDecl = ElementFuncType | ElementFunc | ElementNamespace;
+type ElementScope = ElementDecl[];
+type ElementNamespace = { type: "struct" | "namespace"; body: ElementScope };
+type ElementFuncType = {
+  type: "interface" | "intrinsic";
+  name: string;
+  args?: PortList;
+  hint?: ElementExpr;
+};
+type ElementFunc = {
+  name: string;
+  args?: PortList;
+  hint?: ElementExpr;
+  body: ElementScope | ElementExpr;
+};
+const identifier = [not(options("struct", "namespace")), capture(/\w+/)];
+const expression = unary<ElementExpr>();
+const callExpression = [/\(\s*/, repeat(expression, /\s*,\s*/), /\s*\(/];
+const memberExpression = [/\.\s*/, identifier];
+const typeHint = options([/\s*:/, expression], nothing);
+const portList = repeat(
+  {
+    name: identifier,
+    hint: typeHint,
+  },
+  /\s*,\s*/
+);
+expression(
+  options(
+    {
+      start: identifier,
+      _: whitespace,
+      ops: repeat(options(callExpression, memberExpression), whitespace),
+    },
+    {
+      _: /_\(\s*/,
+      args: portList,
+      __: /\s*=>\s*/,
+      body: expression,
+    }
+  )
+);
+const declaration = unary<ElementDecl>();
+const scope = [/{\s*/, repeat(declaration, whitespace), /\s*}/];
+declaration(
+  options(
+    {
+      name: identifier,
+      _: whitespace,
+      args: options(portList, nothing),
+      hint: typeHint,
+      __: whitespace,
+      body: options([/=\s*/, expression, /\s*;/], scope),
+    },
+    {
+      type: options("struct", "namespace"),
+      _: whitespace,
+      name: identifier,
+      __: whitespace,
+      body: scope,
+    }
+  )
+);
+const elementFile = parser([
+  whitespace,
+  repeat(declaration, whitespace),
+  whitespace,
+  eof,
+]);

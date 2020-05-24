@@ -1,21 +1,27 @@
-export type state = { text: string; position: number };
+export type state = { text: string; position: number; cut?: boolean };
 
 export type parser<T> = (state: state) => T;
-export type spec = string | RegExp | parser<any> | objSpec | spec[];
+export type spec = string | RegExp | parser<unknown> | objSpec | spec[];
 type objSpec = { [key: string]: spec };
 type punctuationKeys = "_" | "__" | "___" | "____" | "_____";
-type resolveNoArray<T> = T extends parser<infer T2>
-  ? T2
-  : T extends RegExp
-  ? string
-  : T extends string
-  ? undefined
+
+type resolveObj<T> = T extends RegExp
+  ? never
+  : T extends parser<unknown>
+  ? never
   : T[keyof T] extends spec
   ? { [P in Exclude<keyof T, punctuationKeys>]: resolve<T[P]> }
   : never;
-export type resolve<T> = T extends Array<infer T3>
-  ? Exclude<resolveNoArray<T3>, undefined>
-  : resolveNoArray<T>;
+type resolveNoArray<T> =
+  | (T extends parser<infer T3> ? T3 : never)
+  | (T extends string ? undefined : never)
+  | (T extends RegExp ? undefined : never)
+  | resolveObj<T>;
+type resolve<T> =
+  | resolveNoArray<T>
+  | (T extends Array<infer T2>
+      ? Exclude<resolveNoArray<T2>, undefined>
+      : never);
 
 /**
  * Converts a value in the form of a 'specification' to a parser function.
@@ -76,39 +82,23 @@ function rEscape(match: string) {
   return match.replace(/([^a-zA-Z0-9])/g, "\\$1");
 }
 
-function patternTest<T>(
-  pattern: RegExp,
-  success: T,
-  advance: number
-): parser<T> {
-  return (state: state) => {
-    pattern.lastIndex = state.position;
-    if (pattern.test(state.text)) {
-      state.position += advance;
-      return success;
-    } else {
-      throw null;
-    }
-  };
-}
-
 export function punctuation<T extends string>(match: T): parser<undefined> {
-  return patternTest(RegExp(rEscape(match), "y"), undefined, match.length);
+  return regex(RegExp(rEscape(match), "y"));
 }
 
 export function literal<T extends string>(match: T): parser<T> {
-  return patternTest(RegExp(rEscape(match), "y"), match, match.length);
+  return convert(regex(RegExp(rEscape(match), "y")), () => match);
 }
 
-export function char(chars: string): parser<null> {
-  return patternTest(RegExp(`[${rEscape(chars)}]`, "y"), null, 1);
+export function char(chars: string): parser<undefined> {
+  return regex(RegExp(`[${rEscape(chars)}]`, "y"));
 }
 
-export function range(a: string, b: string): parser<null> {
+export function range(a: string, b: string): parser<undefined> {
   if (a.length != 1 || b.length != 1) {
     throw Error("String length must be 1");
   }
-  return patternTest(RegExp(`^[${rEscape(a)}-${rEscape(b)}]`, "y"), null, 1);
+  return regex(RegExp(`^[${rEscape(a)}-${rEscape(b)}]`, "y"));
 }
 
 export function repeat<T1 extends spec, T2 extends spec>(
@@ -146,56 +136,71 @@ export function repeat<T1 extends spec, T2 extends spec>(
   };
 }
 
-type resolveOptionsNoArray<T> = T extends parser<infer T2>
-  ? T2
-  : T extends RegExp
-  ? string
-  : T extends string
-  ? T
-  : T[keyof T] extends spec
-  ? { [P in keyof T]: resolve<T[P]> }
+// 'options' resolves parsers slightly differently to other generators
+type resolveOptionsNoArray<T> =
+  | (T extends Array<infer T2> ? Exclude<resolveNoArray<T2>, undefined> : never)
+  | (T extends parser<infer T3> ? T3 : never)
+  | (T extends string ? T : never) ///<-- Strings use their literal value
+  | (T extends RegExp ? string : never) ///<-- Regex always captures
+  | resolveObj<T>;
+// T will always be an Array for 'options'
+type resolveOptions<T> = T extends Array<infer T2>
+  ? Exclude<resolveOptionsNoArray<T2>, undefined>
   : never;
-type resolveOptions<T> = T extends Array<infer T3>
-  ? Exclude<resolveOptionsNoArray<T3>, undefined>
-  : resolveOptionsNoArray<T>;
 
-export function options<T extends Array<spec>>(
-  ...args: T
-): parser<resolveOptions<T[number]>> {
-  const opts = args.map(
-    (opt) =>
-      (typeof opt == "string" ? literal(opt) : parser(opt)) as parser<
-        resolveOptions<T[number]>
-      >
-  );
+export function options<TSpec extends spec & Array<spec>>(
+  ...args: TSpec
+): parser<resolveOptions<TSpec>> {
+  const opts = args.map((opt) => {
+    if (typeof opt == "string") {
+      return literal(opt);
+    } else if (opt instanceof RegExp) {
+      return capture(opt);
+    } else {
+      return parser(opt);
+    }
+  }) as parser<resolveOptions<TSpec>>[];
   return (state: state) => {
     const begin = state.position;
+    const wasCut = state.cut;
+    state.cut = false;
     for (const opt of opts) {
       try {
-        return opt(state);
+        const optVal = opt(state);
+        state.cut = wasCut;
+        return optVal;
       } catch (e) {
         if (e != null) {
           throw e;
         }
       }
+      if (state.cut) {
+        break;
+      }
       state.position = begin;
     }
+    state.cut = wasCut;
     throw null;
   };
 }
 
-export function regex(pattern: RegExp): parser<string> {
+export function cut(state: state): undefined {
+  state.cut = true;
+  return undefined;
+}
+
+export function regex(pattern: RegExp): parser<undefined> {
   if (!pattern.sticky) {
     pattern = RegExp(pattern.source, "y");
   }
   return (state: state) => {
     pattern.lastIndex = state.position;
-    const match = pattern.exec(state.text);
-    if (match == null) {
+    if (pattern.test(state.text)) {
+      state.position = pattern.lastIndex;
+      return undefined;
+    } else {
       throw null;
     }
-    state.position += match[0].length;
-    return match[0];
   };
 }
 
@@ -215,11 +220,11 @@ export function sequence<TSpec extends spec>(
   };
 }
 
-export function structure<T>(obj: {
-  [key: string]: spec;
-}): parser<{ [key: string]: T }> {
+export function structure<TSpec extends spec>(obj: {
+  [key: string]: TSpec;
+}): parser<{ [key: string]: resolve<TSpec> }> {
   return (state: state) => {
-    const retval: { [key: string]: T } = {};
+    const retval: { [key: string]: resolve<TSpec> } = {};
     for (const key in obj) {
       retval[key] = parser(obj[key])(state);
     }
@@ -237,7 +242,7 @@ export function convert<TSrc extends spec, TDst>(
   };
 }
 
-export function stringify<TSpec extends spec>(inner: TSpec): parser<string> {
+export function capture<TSpec extends spec>(inner: TSpec): parser<string> {
   const cInner = parser(inner);
   return (state: state) => {
     const start = state.position;
@@ -264,5 +269,26 @@ export function unary<T = any>(): (arg: state | parser<T>) => T {
   };
 }
 
-export const integer = convert(/\d+/, Number);
-export const float = convert(/[+-]?([0-9]*[.])?[0-9]+/, Number);
+export function eof(state: state): undefined {
+  if (state.position < state.text.length) {
+    throw null;
+  }
+  return undefined;
+}
+
+export function not(inner: spec): parser<undefined> {
+  const cInner = parser(inner);
+  return (state: state) => {
+    const start = state.position;
+    try {
+      cInner(state);
+    } catch {
+      state.position = start;
+      return undefined;
+    }
+    throw null;
+  };
+}
+
+export const integer = convert(capture(/\d+/), Number);
+export const float = convert(capture(/[+-]?([0-9]*[.])?[0-9]+/), Number);

@@ -1,0 +1,34 @@
+Docs:
+  ☐ README
+  ☐ gitbook?
+  ☐ JSDocs
+Examples:
+  ☐ JSON
+  ☐ Calculator
+  ☐ Query string
+  ☐ .ini/TOML
+Performance:
+  ✔ Cut (don't consider other options on success) @done(20-05-25 00:31)
+  ☐ Caching (index+ILR => result)
+Features:
+  ☐ Immediate left recursion (stack check)
+  ☐ 'compile flags'
+  ☐ Parser prototype / fluent API
+  ☐ Tokenization
+  ☐ Repeat min/max
+  ✔ Top level / EOF @done(20-05-24 14:07)
+  ☐ Multiline / EOL
+  ✔ 'not' @done(20-05-24 14:07)
+Debugging:
+  ☐ Function names
+  ☐ Error trace
+Infra:
+  ☐ Examples folder
+  ☐ CI
+  ☐ Coverage
+  ☐ npm package
+  ☐ Plain js
+Inputs:
+  ☐ String
+  ☐ Array / Typed array
+  ☐ Buffer
