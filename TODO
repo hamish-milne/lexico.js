@@ -11,7 +11,7 @@ Performance:
   ✔ Cut (don't consider other options on success) @done(20-05-25 00:31)
   ☐ Caching (index+ILR => result)
 Features:
-  ☐ Immediate left recursion (stack check)
+  ✔ Immediate left recursion (stack check) @done(20-06-02 00:51)
   ☐ 'compile flags'
   ☐ Parser prototype / fluent API
   ☐ Tokenization

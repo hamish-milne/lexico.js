@@ -1,4 +1,7 @@
-export type state = { text: string; position: number; cut?: boolean };
+export type state = {
+  text: string;
+  position: number;
+};
 
 export type parser<T> = (state: state) => T;
 export type spec = string | RegExp | parser<unknown> | objSpec | spec[];
@@ -22,6 +25,13 @@ type resolve<T> =
   | (T extends Array<infer T2>
       ? Exclude<resolveNoArray<T2>, undefined>
       : never);
+
+export function begin(text: string): state {
+  return {
+    text: text,
+    position: 0,
+  };
+}
 
 /**
  * Converts a value in the form of a 'specification' to a parser function.
@@ -136,8 +146,15 @@ export function repeat<T1 extends spec, T2 extends spec>(
   };
 }
 
+type xState = state & {
+  ilr?: Map<symbol, number>;
+  memo?: Array<Set<symbol> | undefined>;
+  cut?: boolean;
+};
+
 // 'options' resolves parsers slightly differently to other generators
 type resolveOptionsNoArray<T> =
+  // Allow nested arrays
   | (T extends Array<infer T2> ? Exclude<resolveNoArray<T2>, undefined> : never)
   | (T extends parser<infer T3> ? T3 : never)
   | (T extends string ? T : never) ///<-- Strings use their literal value
@@ -148,25 +165,85 @@ type resolveOptions<T> = T extends Array<infer T2>
   ? Exclude<resolveOptionsNoArray<T2>, undefined>
   : never;
 
-export function options<TSpec extends spec & Array<spec>>(
+// NOTE: We need to do TSpec:Array because otherwise the array type is inferred from the first argument
+export function options_memoizing<TSpec extends Array<spec>>(
   ...args: TSpec
 ): parser<resolveOptions<TSpec>> {
-  const opts = args.map((opt) => {
+  const opts = args.map((opt, i) => {
     if (typeof opt == "string") {
-      return literal(opt);
+      return [literal(opt), Symbol(opt)];
     } else if (opt instanceof RegExp) {
-      return capture(opt);
+      return [capture(opt), Symbol(opt.source)];
     } else {
-      return parser(opt);
+      return [parser(opt), Symbol(`Option ${i}`)];
     }
-  }) as parser<resolveOptions<TSpec>>[];
-  return (state: state) => {
+  }) as [parser<resolveOptions<TSpec>>, symbol][];
+  return (state: xState) => {
+    const begin = state.position;
+    const wasCut = state.cut;
+    state.cut = false;
+    if (!state.ilr) {
+      state.ilr = new Map();
+    }
+    if (!state.memo) {
+      state.memo = new Array(state.text.length);
+    }
+    for (const opt of opts) {
+      if (state.ilr.get(opt[1]) == begin) {
+        continue;
+      }
+      if (state.memo[begin]?.has(opt[1])) {
+        continue;
+      }
+      state.ilr.set(opt[1], begin);
+      try {
+        const optVal = opt[0](state);
+        state.cut = wasCut;
+        if ((state.ilr.get(opt[1]) ?? -1) <= begin) {
+          state.ilr.delete(opt[1]);
+        }
+        return optVal;
+      } catch (e) {
+        if (e != null) {
+          throw e;
+        }
+        if (!state.memo[begin]) {
+          state.memo[begin] = new Set();
+        }
+        state.memo[begin]!.add(opt[1]);
+      }
+      if (state.cut) {
+        break;
+      }
+      if ((state.ilr.get(opt[1]) ?? -1) <= begin) {
+        state.ilr.delete(opt[1]);
+      }
+      state.position = begin;
+    }
+    state.cut = wasCut;
+    throw null;
+  };
+}
+
+export function options<TSpec extends Array<spec>>(
+  ...args: TSpec
+): parser<resolveOptions<TSpec>> {
+  const opts = args.map((opt, i) => {
+    if (typeof opt == "string") {
+      return [literal(opt), Symbol(opt)];
+    } else if (opt instanceof RegExp) {
+      return [capture(opt), Symbol(opt.source)];
+    } else {
+      return [parser(opt), Symbol(`Option ${i}`)];
+    }
+  }) as [parser<resolveOptions<TSpec>>, symbol][];
+  return (state: xState) => {
     const begin = state.position;
     const wasCut = state.cut;
     state.cut = false;
     for (const opt of opts) {
       try {
-        const optVal = opt(state);
+        const optVal = opt[0](state);
         state.cut = wasCut;
         return optVal;
       } catch (e) {
@@ -185,7 +262,7 @@ export function options<TSpec extends spec & Array<spec>>(
 }
 
 export function cut(state: state): undefined {
-  state.cut = true;
+  (state as xState).cut = true;
   return undefined;
 }
 
@@ -287,6 +364,20 @@ export function not(inner: spec): parser<undefined> {
       return undefined;
     }
     throw null;
+  };
+}
+
+export function top<TSpec extends spec>(inner: TSpec): parser<resolve<TSpec>> {
+  const cInner = parser(inner);
+  return (state: state) => {
+    try {
+      return cInner(state);
+    } catch (e) {
+      if (e != null) {
+        throw e;
+      }
+      throw new Error("Parse error at " + state.position);
+    }
   };
 }
 

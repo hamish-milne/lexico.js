@@ -3,6 +3,7 @@ import {
   unary,
   convert,
   options,
+  options_memoizing,
   whitespace,
   repeat,
   float,
@@ -13,6 +14,8 @@ import {
   not,
   eof,
   cut,
+  begin,
+  top,
 } from "./index";
 import assert from "assert";
 
@@ -30,6 +33,39 @@ describe("Parser", function () {
       }
       throw null;
     });
+  });
+
+  it("correctly parses immediate left recursion constructs", function () {
+    const expr = unary<number>();
+    function op(opr: string, fn: (a: number, b: number) => number) {
+      return convert(
+        {
+          lhs: expr,
+          _: opr,
+          rhs: expr,
+        },
+        (x) => fn(x.lhs, x.rhs)
+      );
+    }
+    expr(
+      top(
+        options_memoizing(
+          op("-", (a, b) => a - b),
+          op("+", (a, b) => a + b),
+          op("*", (a, b) => a * b),
+          op("/", (a, b) => a / b),
+          op("^", Math.pow),
+          parser(["(", expr, ")"]),
+          float
+        )
+      )
+    );
+
+    assert.equal(expr(begin("1-2+3")), -4);
+    assert.equal(expr(begin("1+2-3")), 0);
+    assert.equal(expr(begin("(2^2)")), 4);
+    assert.equal(expr(begin("3+4-1*2")), 5);
+    assert.equal(expr(begin("(3+4)-(1*2)")), 5);
   });
 });
 
@@ -105,29 +141,6 @@ describe("JSON", function () {
     assert.equal(JSON.stringify(result), text);
   });
 });
-
-const expr = unary<number>();
-function op(opr: string, fn: (a: number, b: number) => number) {
-  return convert(
-    {
-      lhs: expr,
-      _: opr,
-      rhs: expr,
-    },
-    (x) => fn(x.lhs, x.rhs)
-  );
-}
-expr(
-  options(
-    op("-", (a, b) => a - b),
-    op("+", (a, b) => a + b),
-    op("*", (a, b) => a * b),
-    op("/", (a, b) => a / b),
-    op("^", (a, b) => a ^ b),
-    parser(["(", expr, ")"]),
-    float
-  )
-);
 
 type ValueExpr = { start: string; ops: (ElementExpr[] | string)[] };
 type PortList = { name: string; hint?: ElementExpr }[];

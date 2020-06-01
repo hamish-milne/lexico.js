@@ -6,5 +6,9 @@
   },
   "editor.formatOnSave": false,
   "editor.detectIndentation": false,
-  "editor.tabSize": 2
+  "editor.tabSize": 2,
+  "mocha.requires": [
+    "ts-node/register"
+   ],
+   "mocha.files.glob": "src/**/*.spec.ts"
 }
